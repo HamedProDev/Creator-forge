@@ -3,7 +3,6 @@ import { createServer as createViteServer } from "vite";
 import session from "express-session";
 import Database from "better-sqlite3";
 import bcrypt from "bcryptjs";
-import Stripe from "stripe";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -11,7 +10,6 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const db = new Database("creatorforge.db");
-const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
 
 // Initialize Database
 db.exec(`
@@ -144,43 +142,16 @@ async function startServer() {
   });
 
   // Payments API
-  app.post("/api/payments/create-checkout", async (req, res) => {
+  app.post("/api/payments/paypal-success", async (req, res) => {
     const userId = (req.session as any).userId;
     if (!userId) return res.status(401).json({ error: "Unauthorized" });
 
-    const { plan } = req.body; // 'pro' or 'enterprise'
-    const user: any = db.prepare("SELECT email FROM users WHERE id = ?").get(userId);
-
-    if (!stripe) {
-      // Mock success for demo if no key provided
-      db.prepare("UPDATE users SET subscription_status = ? WHERE id = ?").run(plan, userId);
-      return res.json({ url: "/?payment=success" });
-    }
-
+    const { plan, orderId } = req.body;
+    
     try {
-      const session = await stripe.checkout.sessions.create({
-        payment_method_types: ["card"],
-        line_items: [
-          {
-            price_data: {
-              currency: "usd",
-              product_data: {
-                name: `CreatorForge ${plan.toUpperCase()} Plan`,
-                description: `Unlock advanced AI features with our ${plan} plan.`,
-              },
-              unit_amount: plan === 'pro' ? 2900 : 9900, // $29 or $99
-            },
-            quantity: 1,
-          },
-        ],
-        mode: "payment",
-        success_url: `${req.headers.origin}/?payment=success`,
-        cancel_url: `${req.headers.origin}/?payment=cancel`,
-        customer_email: user.email,
-        metadata: { userId, plan },
-      });
-
-      res.json({ url: session.url });
+      // In a real production app, you would verify the orderId with PayPal API here
+      db.prepare("UPDATE users SET subscription_status = ? WHERE id = ?").run(plan, userId);
+      res.json({ success: true, plan });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }

@@ -1,6 +1,7 @@
 import { Check, Sparkles, Zap, Shield } from "lucide-react";
 import { useState } from "react";
 import { User } from "../types";
+import { PayPalButtons } from "@paypal/react-paypal-js";
 
 interface PricingProps {
   user: User;
@@ -9,23 +10,21 @@ interface PricingProps {
 
 export default function Pricing({ user, onRefresh }: PricingProps) {
   const [loading, setLoading] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
 
-  const handleSubscribe = async (plan: string) => {
-    setLoading(plan);
+  const handlePayPalSuccess = async (planId: string, orderId: string) => {
     try {
-      const res = await fetch("/api/payments/create-checkout", {
+      const res = await fetch("/api/payments/paypal-success", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ plan }),
+        body: JSON.stringify({ plan: planId, orderId }),
       });
-      const data = await res.json();
-      if (data.url) {
-        window.location.href = data.url;
+      if (res.ok) {
+        setSuccess(planId);
+        onRefresh();
       }
     } catch (error) {
-      console.error("Subscription failed", error);
-    } finally {
-      setLoading(null);
+      console.error("PayPal success handling failed", error);
     }
   };
 
@@ -133,21 +132,53 @@ export default function Pricing({ user, onRefresh }: PricingProps) {
               ))}
             </div>
 
-            <button
-              onClick={() => handleSubscribe(plan.id)}
-              disabled={plan.disabled || loading !== null}
-              className={`w-full py-4 rounded-2xl font-bold transition-all duration-300 flex items-center justify-center gap-2 ${
-                plan.popular 
-                  ? 'bg-primary text-white neon-glow hover:bg-primary/90' 
-                  : 'bg-white/5 text-text-heading hover:bg-white/10 border border-white/10'
-              } disabled:opacity-50 disabled:cursor-not-allowed`}
-            >
-              {loading === plan.id ? (
-                <div className="w-5 h-5 border-2 border-white/30 border-t-white animate-spin rounded-full" />
-              ) : (
-                plan.buttonText
-              )}
-            </button>
+            {plan.id === 'free' ? (
+              <button
+                disabled={plan.disabled}
+                className={`w-full py-4 rounded-2xl font-bold transition-all duration-300 flex items-center justify-center gap-2 ${
+                  plan.popular 
+                    ? 'bg-primary text-white neon-glow hover:bg-primary/90' 
+                    : 'bg-white/5 text-text-heading hover:bg-white/10 border border-white/10'
+                } disabled:opacity-50 disabled:cursor-not-allowed`}
+              >
+                {plan.buttonText}
+              </button>
+            ) : success === plan.id ? (
+              <div className="w-full py-4 rounded-2xl bg-green-500/20 text-green-400 font-bold flex items-center justify-center gap-2 border border-green-500/30">
+                <Check className="w-5 h-5" />
+                Plan Activated!
+              </div>
+            ) : user.subscription_status === plan.id ? (
+              <div className="w-full py-4 rounded-2xl bg-primary/20 text-primary font-bold flex items-center justify-center gap-2 border border-primary/30">
+                Current Plan
+              </div>
+            ) : (
+              <div className="relative z-10">
+                <PayPalButtons
+                  style={{ layout: "vertical", shape: "rect", label: "pay" }}
+                  createOrder={(data, actions) => {
+                    return actions.order.create({
+                      intent: "CAPTURE",
+                      purchase_units: [
+                        {
+                          amount: {
+                            currency_code: "USD",
+                            value: plan.price,
+                          },
+                          description: `CreatorForge ${plan.name} Plan`,
+                        },
+                      ],
+                    });
+                  }}
+                  onApprove={async (data, actions) => {
+                    if (actions.order) {
+                      const order = await actions.order.capture();
+                      await handlePayPalSuccess(plan.id, order.id);
+                    }
+                  }}
+                />
+              </div>
+            )}
           </div>
         ))}
       </div>

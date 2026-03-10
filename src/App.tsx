@@ -15,6 +15,7 @@ import {
 import { motion, AnimatePresence } from "motion/react";
 import { User, ContentItem, Role } from "./types";
 import { cn } from "./lib/utils";
+import { PayPalScriptProvider } from "@paypal/react-paypal-js";
 import Auth from "./components/Auth";
 import Dashboard from "./components/Dashboard";
 import CreateContent from "./components/CreateContent";
@@ -80,8 +81,13 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-bg-dark flex text-text-body">
-      {/* Sidebar */}
+    <PayPalScriptProvider options={{ 
+      clientId: (import.meta as any).env.VITE_PAYPAL_CLIENT_ID || "test",
+      currency: "USD",
+      intent: "capture"
+    }}>
+      <div className="min-h-screen bg-bg-dark flex text-text-body">
+        {/* Sidebar */}
       <aside 
         className={cn(
           "bg-secondary border-r border-white/5 transition-all duration-300 flex flex-col z-50",
@@ -197,5 +203,6 @@ export default function App() {
         </div>
       </main>
     </div>
+    </PayPalScriptProvider>
   );
 }
