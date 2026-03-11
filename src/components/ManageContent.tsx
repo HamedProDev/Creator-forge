@@ -16,21 +16,30 @@ import {
   Image as ImageIcon,
   Mic2
 } from "lucide-react";
-import { ContentItem, ContentType, Platform } from "../types";
+import { User, ContentItem, ContentType, Platform } from "../types";
 
-export default function ManageContent() {
+interface ManageContentProps {
+  user: User | null;
+  onNavigate: (view: any) => void;
+}
+
+export default function ManageContent({ user, onNavigate }: ManageContentProps) {
   const [content, setContent] = useState<ContentItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [filterType, setFilterType] = useState<ContentType | 'all'>('all');
 
   useEffect(() => {
-    fetchContent();
-  }, []);
+    if (user) {
+      fetchContent();
+    } else {
+      setLoading(false);
+    }
+  }, [user]);
 
   const fetchContent = async () => {
     try {
-      const res = await fetch("/api/content");
+      const res = await fetch("/api/content", { credentials: "include" });
       if (res.ok) {
         const data = await res.json();
         setContent(data.content);
@@ -39,6 +48,22 @@ export default function ManageContent() {
       console.error("Failed to fetch content", error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleDelete = async (id: number) => {
+    if (!confirm("Are you sure you want to delete this asset?")) return;
+    
+    try {
+      const res = await fetch(`/api/content/${id}`, { 
+        method: "DELETE",
+        credentials: "include"
+      });
+      if (res.ok) {
+        setContent(content.filter(item => item.id !== id));
+      }
+    } catch (error) {
+      console.error("Delete failed", error);
     }
   };
 
@@ -68,6 +93,33 @@ export default function ManageContent() {
       default: return Sparkles;
     }
   };
+
+  if (!user) {
+    return (
+      <div className="glass-card p-24 rounded-[3rem] text-center max-w-2xl mx-auto mt-12 border border-primary/20 neon-glow">
+        <div className="w-24 h-24 bg-primary/10 rounded-[2.5rem] flex items-center justify-center mx-auto mb-8 border border-primary/20 relative">
+          <div className="absolute inset-0 rounded-[2.5rem] bg-primary/20 animate-ping opacity-20"></div>
+          <FolderOpen className="w-12 h-12 text-primary neon-glow" />
+        </div>
+        <h2 className="text-3xl font-bold mb-4 text-text-heading font-display tracking-tight">Your Library Awaits</h2>
+        <p className="text-text-body mb-10 text-lg leading-relaxed">Sign in to save your AI-generated assets, organize your content, and access them from anywhere.</p>
+        <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+          <button 
+            onClick={() => (window as any).dispatchEvent(new CustomEvent('open-auth'))}
+            className="px-8 py-4 bg-primary text-white rounded-2xl font-bold neon-glow hover:bg-primary/90 transition-all active:scale-95"
+          >
+            Sign In Now
+          </button>
+          <button 
+            onClick={() => onNavigate('create')}
+            className="px-8 py-4 bg-white/5 text-text-heading border border-white/10 rounded-2xl font-bold hover:bg-white/10 transition-all active:scale-95"
+          >
+            Try Creator Tools
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-8">
@@ -144,8 +196,11 @@ export default function ManageContent() {
                     <button className="p-3 bg-white/10 hover:bg-primary rounded-full text-white transition-all hover:scale-110">
                       <ExternalLink className="w-5 h-5" />
                     </button>
-                    <button className="p-3 bg-white/10 hover:bg-primary rounded-full text-white transition-all hover:scale-110">
-                      <Download className="w-5 h-5" />
+                    <button 
+                      onClick={() => handleDelete(item.id)}
+                      className="p-3 bg-white/10 hover:bg-red-500 rounded-full text-white transition-all hover:scale-110"
+                    >
+                      <Trash2 className="w-5 h-5" />
                     </button>
                   </div>
                 </div>

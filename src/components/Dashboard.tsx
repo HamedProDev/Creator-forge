@@ -13,7 +13,7 @@ import {
 import { User, ContentItem } from "../types";
 
 interface DashboardProps {
-  user: User;
+  user: User | null;
   onNavigate: (view: any) => void;
 }
 
@@ -22,12 +22,16 @@ export default function Dashboard({ user, onNavigate }: DashboardProps) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetchContent();
-  }, []);
+    if (user) {
+      fetchContent();
+    } else {
+      setLoading(false);
+    }
+  }, [user]);
 
   const fetchContent = async () => {
     try {
-      const res = await fetch("/api/content");
+      const res = await fetch("/api/content", { credentials: "include" });
       if (res.ok) {
         const data = await res.json();
         setRecentContent(data.content.slice(0, 4));
@@ -71,19 +75,26 @@ export default function Dashboard({ user, onNavigate }: DashboardProps) {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* Quick Actions */}
         <div className="lg:col-span-1 space-y-6">
-          {user.subscription_status === 'free' && (
+          {(!user || user.subscription_status === 'free') && (
             <div className="p-6 rounded-3xl bg-gradient-to-br from-primary/20 to-accent/20 border border-primary/20 relative overflow-hidden group">
               <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:scale-110 transition-transform">
                 <Zap className="w-24 h-24 text-primary" />
               </div>
-              <h3 className="text-xl font-bold text-text-heading mb-2">Upgrade to Pro</h3>
-              <p className="text-sm text-text-body/80 mb-6">Unlock unlimited AI generation, 4K images, and AI voiceovers.</p>
+              <h3 className="text-xl font-bold text-text-heading mb-2">
+                {user ? "Upgrade to Pro" : "Unlock Full Power"}
+              </h3>
+              <p className="text-sm text-text-body/80 mb-6">
+                {user 
+                  ? "Unlock unlimited AI generation, 4K images, and AI voiceovers."
+                  : "Sign in to save your content, track analytics, and use advanced AI models."
+                }
+              </p>
               <button 
-                onClick={() => onNavigate('pricing')}
+                onClick={() => user ? onNavigate('pricing') : (window as any).dispatchEvent(new CustomEvent('open-auth'))}
                 className="w-full py-3 bg-primary text-white rounded-xl font-bold text-sm neon-glow hover:bg-primary/90 transition-all flex items-center justify-center gap-2"
               >
                 <Sparkles className="w-4 h-4" />
-                View Plans
+                {user ? "View Plans" : "Get Started Now"}
               </button>
             </div>
           )}

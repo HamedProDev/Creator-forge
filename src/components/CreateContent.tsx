@@ -29,7 +29,14 @@ import {
 import { ContentType, Platform } from "../types";
 import { cn } from "../lib/utils";
 
-export default function CreateContent() {
+import { User } from "../types";
+
+interface CreateContentProps {
+  user: User | null;
+  onAction: () => boolean;
+}
+
+export default function CreateContent({ user, onAction }: CreateContentProps) {
   const [activeTab, setActiveTab] = useState<ContentType>('thumbnail');
   const [platform, setPlatform] = useState<Platform>('youtube');
   const [topic, setTopic] = useState("");
@@ -41,6 +48,20 @@ export default function CreateContent() {
 
   const handleGenerate = async () => {
     if (!topic) return;
+
+    // Check action gating for guests
+    if (!onAction()) return;
+
+    // Check for API key if using Pro Image
+    if (activeTab === 'pro-image' as any) {
+      const hasKey = await (window as any).aistudio.hasSelectedApiKey();
+      if (!hasKey) {
+        await (window as any).aistudio.openSelectKey();
+        // After opening, we assume they might have selected it or will try again
+        return;
+      }
+    }
+
     setLoading(true);
     setResult(null);
     try {
@@ -63,14 +84,22 @@ export default function CreateContent() {
         data = await generateHashtags(topic);
       }
       setResult(data);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Generation failed", error);
+      if (error.message?.includes("Requested entity was not found")) {
+        alert("API Key issue. Please re-select your API key.");
+        await (window as any).aistudio.openSelectKey();
+      }
     } finally {
       setLoading(false);
     }
   };
 
   const handleSave = async (item?: any) => {
+    if (!user) {
+      onAction(); // This will trigger the auth modal
+      return;
+    }
     setSaveLoading(true);
     try {
       const body: any = {
@@ -96,6 +125,7 @@ export default function CreateContent() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
+        credentials: "include"
       });
 
       if (res.ok) {

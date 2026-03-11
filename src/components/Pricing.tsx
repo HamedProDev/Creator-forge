@@ -4,7 +4,7 @@ import { User } from "../types";
 import { PayPalButtons } from "@paypal/react-paypal-js";
 
 interface PricingProps {
-  user: User;
+  user: User | null;
   onRefresh: () => void;
 }
 
@@ -12,12 +12,21 @@ export default function Pricing({ user, onRefresh }: PricingProps) {
   const [loading, setLoading] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
+  const handleAction = (planId: string) => {
+    if (!user) {
+      (window as any).dispatchEvent(new CustomEvent('open-auth'));
+      return false;
+    }
+    return true;
+  };
+
   const handlePayPalSuccess = async (planId: string, orderId: string) => {
     try {
       const res = await fetch("/api/payments/paypal-success", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ plan: planId, orderId }),
+        credentials: "include"
       });
       if (res.ok) {
         setSuccess(planId);
@@ -40,8 +49,8 @@ export default function Pricing({ user, onRefresh }: PricingProps) {
         'Standard Image Generation',
         'Community Support'
       ],
-      buttonText: user.subscription_status === 'free' ? 'Current Plan' : 'Downgrade',
-      disabled: user.subscription_status === 'free',
+      buttonText: user?.subscription_status === 'free' ? 'Current Plan' : 'Downgrade',
+      disabled: user?.subscription_status === 'free',
       icon: Zap
     },
     {
@@ -56,8 +65,8 @@ export default function Pricing({ user, onRefresh }: PricingProps) {
         'AI Voiceovers (TTS)',
         'Priority Support'
       ],
-      buttonText: user.subscription_status === 'pro' ? 'Current Plan' : 'Upgrade to Pro',
-      disabled: user.subscription_status === 'pro',
+      buttonText: user?.subscription_status === 'pro' ? 'Current Plan' : 'Upgrade to Pro',
+      disabled: user?.subscription_status === 'pro',
       icon: Sparkles,
       popular: true
     },
@@ -73,8 +82,8 @@ export default function Pricing({ user, onRefresh }: PricingProps) {
         'Dedicated Account Manager',
         'Team Collaboration Tools'
       ],
-      buttonText: user.subscription_status === 'enterprise' ? 'Current Plan' : 'Contact Sales',
-      disabled: user.subscription_status === 'enterprise',
+      buttonText: user?.subscription_status === 'enterprise' ? 'Current Plan' : 'Contact Sales',
+      disabled: user?.subscription_status === 'enterprise',
       icon: Shield
     }
   ];
@@ -135,6 +144,7 @@ export default function Pricing({ user, onRefresh }: PricingProps) {
             {plan.id === 'free' ? (
               <button
                 disabled={plan.disabled}
+                onClick={() => handleAction(plan.id)}
                 className={`w-full py-4 rounded-2xl font-bold transition-all duration-300 flex items-center justify-center gap-2 ${
                   plan.popular 
                     ? 'bg-primary text-white neon-glow hover:bg-primary/90' 
@@ -148,10 +158,17 @@ export default function Pricing({ user, onRefresh }: PricingProps) {
                 <Check className="w-5 h-5" />
                 Plan Activated!
               </div>
-            ) : user.subscription_status === plan.id ? (
+            ) : user?.subscription_status === plan.id ? (
               <div className="w-full py-4 rounded-2xl bg-primary/20 text-primary font-bold flex items-center justify-center gap-2 border border-primary/30">
                 Current Plan
               </div>
+            ) : !user ? (
+              <button
+                onClick={() => handleAction(plan.id)}
+                className="w-full py-4 rounded-2xl bg-primary text-white neon-glow font-bold flex items-center justify-center gap-2 hover:bg-primary/90 transition-all"
+              >
+                Sign In to Upgrade
+              </button>
             ) : (
               <div className="relative z-10">
                 <PayPalButtons

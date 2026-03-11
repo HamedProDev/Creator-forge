@@ -22,7 +22,7 @@ export default function AdminPanel() {
 
   const fetchStats = async () => {
     try {
-      const res = await fetch("/api/admin/stats");
+      const res = await fetch("/api/admin/stats", { credentials: "include" });
       if (res.ok) {
         const data = await res.json();
         setStats(data);

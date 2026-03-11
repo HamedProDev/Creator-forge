@@ -1,13 +1,14 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Sparkles, Mail, Lock, User as UserIcon, ArrowRight } from "lucide-react";
 import { motion } from "motion/react";
 import { cn } from "../lib/utils";
 
 interface AuthProps {
   onLogin: () => void;
+  isModal?: boolean;
 }
 
-export default function Auth({ onLogin }: AuthProps) {
+export default function Auth({ onLogin, isModal }: AuthProps) {
   const [isLogin, setIsLogin] = useState(true);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -15,8 +16,45 @@ export default function Auth({ onLogin }: AuthProps) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
+  useEffect(() => {
+    const handleOAuthMessage = (event: MessageEvent) => {
+      if (event.data?.type === 'OAUTH_AUTH_SUCCESS') {
+        onLogin();
+      }
+    };
+    window.addEventListener('message', handleOAuthMessage);
+    return () => window.removeEventListener('message', handleOAuthMessage);
+  }, [onLogin]);
+
+  const handleGoogleLogin = async () => {
+    try {
+      const res = await fetch("/api/auth/google/url");
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.error || "Failed to start Google login");
+      }
+      const { url, redirectUri } = await res.json();
+      
+      console.log("Google OAuth Redirect URI:", redirectUri);
+      
+      const width = 500;
+      const height = 600;
+      const left = window.screenX + (window.outerWidth - width) / 2;
+      const top = window.screenY + (window.outerHeight - height) / 2;
+      
+      window.open(
+        url,
+        "google_login",
+        `width=${width},height=${height},left=${left},top=${top}`
+      );
+    } catch (err: any) {
+      setError(err.message || "Failed to start Google login");
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    console.log(`Frontend: Attempting ${isLogin ? 'login' : 'registration'} for ${email}`);
     setError("");
     setLoading(true);
 
@@ -28,9 +66,18 @@ export default function Auth({ onLogin }: AuthProps) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
+        credentials: "include"
       });
 
-      const data = await res.json();
+      let data;
+      const contentType = res.headers.get("content-type");
+      console.log(`Frontend: Response status ${res.status}, Content-Type: ${contentType}`);
+      
+      if (contentType && contentType.includes("application/json")) {
+        data = await res.json();
+        console.log("Frontend: Response data:", data);
+      }
+
       if (res.ok) {
         if (isLogin) {
           onLogin();
@@ -39,7 +86,7 @@ export default function Auth({ onLogin }: AuthProps) {
           setError("Account created! Please login.");
         }
       } else {
-        setError(data.error || "Something went wrong");
+        setError(data?.error || `Error: ${res.status}`);
       }
     } catch (err) {
       setError("Failed to connect to server");
@@ -49,14 +96,19 @@ export default function Auth({ onLogin }: AuthProps) {
   };
 
   return (
-    <div className="min-h-screen bg-bg-dark flex items-center justify-center p-4 overflow-hidden relative">
+    <div className={cn(
+      "flex items-center justify-center p-4 overflow-hidden relative",
+      isModal ? "w-full" : "min-h-screen bg-bg-dark"
+    )}>
       {/* Background Glows */}
-      <div className="absolute top-0 left-0 w-full h-full overflow-hidden -z-10">
-        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-primary/20 blur-[120px] rounded-full"></div>
-        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-accent/10 blur-[120px] rounded-full"></div>
-      </div>
+      {!isModal && (
+        <div className="absolute top-0 left-0 w-full h-full overflow-hidden -z-10">
+          <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-primary/20 blur-[120px] rounded-full"></div>
+          <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-accent/10 blur-[120px] rounded-full"></div>
+        </div>
+      )}
 
-      <div className="max-w-md w-full relative z-10">
+      <div className={cn("max-w-md w-full relative z-10", isModal ? "mt-0" : "")}>
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-20 h-20 bg-secondary border border-white/10 rounded-3xl mb-6 neon-glow">
             <Sparkles className="w-10 h-10 text-primary" />
@@ -68,7 +120,10 @@ export default function Auth({ onLogin }: AuthProps) {
         <motion.div 
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="glass-card p-10 rounded-[2.5rem] shadow-2xl shadow-black/50 relative z-20"
+          className={cn(
+            "glass-card p-10 rounded-[2.5rem] shadow-2xl relative z-20",
+            !isModal && "shadow-black/50"
+          )}
         >
           <h2 className="text-2xl font-bold mb-8 text-text-heading">{isLogin ? "Welcome Back" : "Create Account"}</h2>
           
@@ -133,10 +188,45 @@ export default function Auth({ onLogin }: AuthProps) {
             <button
               type="submit"
               disabled={loading}
-              className="w-full bg-primary text-white py-4 rounded-2xl font-bold flex items-center justify-center gap-3 hover:bg-primary/90 active:scale-[0.98] transition-all disabled:opacity-50 neon-glow mt-4 cursor-pointer relative z-20"
+              className="w-full bg-primary text-white py-4 rounded-2xl font-bold flex items-center justify-center gap-3 hover:bg-primary/90 active:scale-[0.98] transition-all disabled:opacity-50 neon-glow mt-4 cursor-pointer relative"
             >
               {loading ? "Processing..." : isLogin ? "Sign In" : "Create Account"}
               <ArrowRight className="w-5 h-5" />
+            </button>
+
+            <div className="relative my-8">
+              <div className="absolute inset-0 flex items-center">
+                <div className="w-full border-t border-white/5"></div>
+              </div>
+              <div className="relative flex justify-center text-xs uppercase">
+                <span className="bg-[#1a1a1a] px-4 text-text-body/40 font-bold tracking-widest">Or continue with</span>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleGoogleLogin}
+              className="w-full bg-white/5 border border-white/10 text-text-heading py-4 rounded-2xl font-bold flex items-center justify-center gap-3 hover:bg-white/10 active:scale-[0.98] transition-all cursor-pointer"
+            >
+              <svg className="w-5 h-5" viewBox="0 0 24 24">
+                <path
+                  fill="currentColor"
+                  d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                />
+                <path
+                  fill="currentColor"
+                  d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                />
+                <path
+                  fill="currentColor"
+                  d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"
+                />
+                <path
+                  fill="currentColor"
+                  d="M12 5.38c1.62 0 3.06.56 4.21 1.66l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
+                />
+              </svg>
+              Google
             </button>
           </form>
 
