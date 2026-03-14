@@ -1,14 +1,21 @@
-import { useState, useEffect } from "react";
-import { Sparkles, Mail, Lock, User as UserIcon, ArrowRight } from "lucide-react";
+import { useState } from "react";
+import { Sparkles, Mail, Lock, User as UserIcon, ArrowRight, X } from "lucide-react";
 import { motion } from "motion/react";
 import { cn } from "../lib/utils";
+import { auth } from "../firebase";
+import { 
+  signInWithEmailAndPassword, 
+  createUserWithEmailAndPassword, 
+  signInWithPopup, 
+  GoogleAuthProvider,
+  updateProfile
+} from "firebase/auth";
 
 interface AuthProps {
-  onLogin: () => void;
-  isModal?: boolean;
+  onClose?: () => void;
 }
 
-export default function Auth({ onLogin, isModal }: AuthProps) {
+export default function Auth({ onClose }: AuthProps) {
   const [isLogin, setIsLogin] = useState(true);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -16,116 +23,67 @@ export default function Auth({ onLogin, isModal }: AuthProps) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    const handleOAuthMessage = (event: MessageEvent) => {
-      if (event.data?.type === 'OAUTH_AUTH_SUCCESS') {
-        onLogin();
-      }
-    };
-    window.addEventListener('message', handleOAuthMessage);
-    return () => window.removeEventListener('message', handleOAuthMessage);
-  }, [onLogin]);
-
   const handleGoogleLogin = async () => {
+    setLoading(true);
+    setError("");
     try {
-      const res = await fetch("/api/auth/google/url");
-      if (!res.ok) {
-        const errData = await res.json();
-        throw new Error(errData.error || "Failed to start Google login");
-      }
-      const { url, redirectUri } = await res.json();
-      
-      console.log("Google OAuth Redirect URI:", redirectUri);
-      
-      const width = 500;
-      const height = 600;
-      const left = window.screenX + (window.outerWidth - width) / 2;
-      const top = window.screenY + (window.outerHeight - height) / 2;
-      
-      window.open(
-        url,
-        "google_login",
-        `width=${width},height=${height},left=${left},top=${top}`
-      );
+      const provider = new GoogleAuthProvider();
+      await signInWithPopup(auth, provider);
+      if (onClose) onClose();
     } catch (err: any) {
-      setError(err.message || "Failed to start Google login");
+      setError(err.message || "Failed to login with Google");
+    } finally {
+      setLoading(false);
     }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    console.log(`Frontend: Attempting ${isLogin ? 'login' : 'registration'} for ${email}`);
     setError("");
     setLoading(true);
 
-    const endpoint = isLogin ? "/api/auth/login" : "/api/auth/register";
-    const body = isLogin ? { email, password } : { email, password, name };
-
     try {
-      const res = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-        credentials: "include"
-      });
-
-      let data;
-      const contentType = res.headers.get("content-type");
-      console.log(`Frontend: Response status ${res.status}, Content-Type: ${contentType}`);
-      
-      if (contentType && contentType.includes("application/json")) {
-        data = await res.json();
-        console.log("Frontend: Response data:", data);
-      }
-
-      if (res.ok) {
-        if (isLogin) {
-          onLogin();
-        } else {
-          setIsLogin(true);
-          setError("Account created! Please login.");
-        }
+      if (isLogin) {
+        await signInWithEmailAndPassword(auth, email, password);
       } else {
-        setError(data?.error || `Error: ${res.status}`);
+        const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+        await updateProfile(userCredential.user, { displayName: name });
       }
-    } catch (err) {
-      setError("Failed to connect to server");
+      if (onClose) onClose();
+    } catch (err: any) {
+      console.error("Auth error:", err);
+      setError(err.message || "Authentication failed");
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className={cn(
-      "flex items-center justify-center p-4 overflow-hidden relative",
-      isModal ? "w-full" : "min-h-screen bg-bg-dark"
-    )}>
-      {/* Background Glows */}
-      {!isModal && (
-        <div className="absolute top-0 left-0 w-full h-full overflow-hidden -z-10">
-          <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-primary/20 blur-[120px] rounded-full"></div>
-          <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-accent/10 blur-[120px] rounded-full"></div>
-        </div>
-      )}
+    <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+      <motion.div 
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        className="max-w-md w-full relative"
+      >
+        {onClose && (
+          <button 
+            onClick={onClose}
+            className="absolute -top-12 right-0 p-2 text-white/60 hover:text-white transition-colors"
+          >
+            <X className="w-6 h-6" />
+          </button>
+        )}
 
-      <div className={cn("max-w-md w-full relative z-10", isModal ? "mt-0" : "")}>
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-20 h-20 bg-secondary border border-white/10 rounded-3xl mb-6 neon-glow">
-            <Sparkles className="w-10 h-10 text-primary" />
+          <div className="inline-flex items-center justify-center w-16 h-16 bg-secondary border border-white/10 rounded-2xl mb-4 neon-glow">
+            <Sparkles className="w-8 h-8 text-primary" />
           </div>
-          <h1 className="text-4xl font-bold tracking-tighter mb-2 text-text-heading font-display">CreatorForge</h1>
-          <p className="text-text-body/80 font-medium">Empowering creators with AI magic</p>
+          <h1 className="text-3xl font-bold tracking-tighter mb-1 text-text-heading font-display">CreatorForge</h1>
+          <p className="text-text-body/60 text-sm font-medium">Empowering creators with AI magic</p>
         </div>
 
-        <motion.div 
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className={cn(
-            "glass-card p-10 rounded-[2.5rem] shadow-2xl relative z-20",
-            !isModal && "shadow-black/50"
-          )}
-        >
-          <h2 className="text-2xl font-bold mb-8 text-text-heading">{isLogin ? "Welcome Back" : "Create Account"}</h2>
+        <div className="glass-card p-8 rounded-[2rem] shadow-2xl relative z-20">
+          <h2 className="text-xl font-bold mb-6 text-text-heading">{isLogin ? "Welcome Back" : "Create Account"}</h2>
           
           <form onSubmit={handleSubmit} className="space-y-5 relative z-30">
             {!isLogin && (
@@ -239,14 +197,14 @@ export default function Auth({ onLogin, isModal }: AuthProps) {
               {isLogin ? "New here? Create Account" : "Already a member? Sign in"}
             </button>
           </div>
-        </motion.div>
+        </div>
         
-        <div className="mt-10 text-center">
-          <p className="text-xs font-bold text-text-body/40 uppercase tracking-[0.2em]">
-            Admin Demo: admin@creatorforge.com / admin123
+        <div className="mt-8 text-center">
+          <p className="text-[10px] font-bold text-text-body/40 uppercase tracking-[0.2em]">
+            Secure Authentication powered by Firebase
           </p>
         </div>
-      </div>
+      </motion.div>
     </div>
   );
 }

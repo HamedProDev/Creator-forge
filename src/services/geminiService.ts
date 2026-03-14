@@ -66,12 +66,12 @@ export async function generateScript(topic: string, platform: string) {
   }
 }
 
-export async function generateHashtags(topic: string) {
+export async function generateHashtags(topic: string, platform: string = 'youtube') {
   const ai = getAI();
   try {
     const response = await ai.models.generateContent({
       model: "gemini-flash-latest",
-      contents: `Suggest 15 trending hashtags for a video about: ${topic}. Return as a comma-separated list.`,
+      contents: `Suggest 15 trending, high-reach hashtags for a ${platform} video about: ${topic}. Return as a comma-separated list of hashtags starting with #.`,
     });
     return response.text;
   } catch (error) {

@@ -16,7 +16,19 @@ import {
   Image as ImageIcon,
   Mic2
 } from "lucide-react";
+import { 
+  collection, 
+  query, 
+  where, 
+  getDocs, 
+  deleteDoc, 
+  doc,
+  orderBy,
+  updateDoc
+} from "firebase/firestore";
+import { db } from "../firebase";
 import { User, ContentItem, ContentType, Platform } from "../types";
+import { motion, AnimatePresence } from "motion/react";
 
 interface ManageContentProps {
   user: User | null;
@@ -38,12 +50,19 @@ export default function ManageContent({ user, onNavigate }: ManageContentProps) 
   }, [user]);
 
   const fetchContent = async () => {
+    if (!user) return;
     try {
-      const res = await fetch("/api/content", { credentials: "include" });
-      if (res.ok) {
-        const data = await res.json();
-        setContent(data.content);
-      }
+      const q = query(
+        collection(db, "content"), 
+        where("user_id", "==", user.id.toString()),
+        orderBy("created_at", "desc")
+      );
+      const querySnapshot = await getDocs(q);
+      const data = querySnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...(doc.data() as any)
+      })) as ContentItem[];
+      setContent(data);
     } catch (error) {
       console.error("Failed to fetch content", error);
     } finally {
@@ -51,17 +70,12 @@ export default function ManageContent({ user, onNavigate }: ManageContentProps) 
     }
   };
 
-  const handleDelete = async (id: number) => {
+  const handleDelete = async (id: string) => {
     if (!confirm("Are you sure you want to delete this asset?")) return;
     
     try {
-      const res = await fetch(`/api/content/${id}`, { 
-        method: "DELETE",
-        credentials: "include"
-      });
-      if (res.ok) {
-        setContent(content.filter(item => item.id !== id));
-      }
+      await deleteDoc(doc(db, "content", id));
+      setContent(content.filter(item => item.id.toString() !== id));
     } catch (error) {
       console.error("Delete failed", error);
     }
@@ -197,7 +211,7 @@ export default function ManageContent({ user, onNavigate }: ManageContentProps) 
                       <ExternalLink className="w-5 h-5" />
                     </button>
                     <button 
-                      onClick={() => handleDelete(item.id)}
+                      onClick={() => handleDelete(item.id.toString())}
                       className="p-3 bg-white/10 hover:bg-red-500 rounded-full text-white transition-all hover:scale-110"
                     >
                       <Trash2 className="w-5 h-5" />

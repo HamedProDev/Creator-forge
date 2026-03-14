@@ -10,6 +10,15 @@ import {
   Video,
   Zap
 } from "lucide-react";
+import { 
+  collection, 
+  query, 
+  where, 
+  getDocs, 
+  orderBy, 
+  limit 
+} from "firebase/firestore";
+import { db } from "../firebase";
 import { User, ContentItem } from "../types";
 
 interface DashboardProps {
@@ -30,12 +39,20 @@ export default function Dashboard({ user, onNavigate }: DashboardProps) {
   }, [user]);
 
   const fetchContent = async () => {
+    if (!user) return;
     try {
-      const res = await fetch("/api/content", { credentials: "include" });
-      if (res.ok) {
-        const data = await res.json();
-        setRecentContent(data.content.slice(0, 4));
-      }
+      const q = query(
+        collection(db, "content"), 
+        where("user_id", "==", user.id.toString()),
+        orderBy("created_at", "desc"),
+        limit(4)
+      );
+      const querySnapshot = await getDocs(q);
+      const data = querySnapshot.docs.map(doc => ({
+        id: doc.id as any,
+        ...doc.data()
+      })) as ContentItem[];
+      setRecentContent(data);
     } catch (error) {
       console.error("Failed to fetch content", error);
     } finally {
@@ -102,13 +119,13 @@ export default function Dashboard({ user, onNavigate }: DashboardProps) {
           <h2 className="text-xl font-bold text-text-heading">Quick Create</h2>
           <div className="grid gap-4">
             {[
-              { label: 'YouTube Thumbnail', icon: Youtube, color: 'text-red-500' },
-              { label: 'TikTok Script', icon: Video, color: 'text-white' },
-              { label: 'Instagram Hashtags', icon: Instagram, color: 'text-pink-500' },
+              { label: 'YouTube Thumbnail', icon: Youtube, color: 'text-red-500', tab: 'thumbnail' },
+              { label: 'TikTok Script', icon: Video, color: 'text-white', tab: 'script' },
+              { label: 'Instagram Hashtags', icon: Instagram, color: 'text-pink-500', tab: 'hashtags' },
             ].map((action, i) => (
               <button
                 key={i}
-                onClick={() => onNavigate('create')}
+                onClick={() => window.dispatchEvent(new CustomEvent('navigate-to-create', { detail: { tab: action.tab } }))}
                 className="flex items-center gap-4 p-5 glass-card rounded-2xl hover:border-primary/40 hover:neon-glow transition-all group text-left"
               >
                 <div className={`w-12 h-12 rounded-xl bg-white/5 flex items-center justify-center ${action.color} shrink-0`}>

@@ -1,0 +1,83 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Fields: email, name, role, credits, subscription_status, referral_code, profile_pic, created_at
+    //
+    // Collection: content
+    // Fields: user_id, type, title, description, content_data, image_url, status, platform, created_at
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isDocOwner() {
+      return isAuthenticated() && request.auth.uid == resource.data.user_id;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && 
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+         (request.auth.token.email == "hamussein01@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+    function isValidUser(data) {
+      return hasOnlyAllowedFields(['email', 'name', 'role', 'credits', 'subscription_status', 'referral_code', 'profile_pic', 'created_at']) &&
+        data.email is string && isValidEmail(data.email) &&
+        data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+        data.role in ['user', 'admin'] &&
+        data.credits is int &&
+        data.subscription_status in ['free', 'pro', 'enterprise'];
+    }
+
+    function isValidContent(data) {
+      return hasOnlyAllowedFields(['user_id', 'type', 'title', 'description', 'content_data', 'image_url', 'status', 'platform', 'created_at', 'server_created_at']) &&
+        data.user_id == request.auth.uid &&
+        data.type in ['thumbnail', 'image', 'title', 'script', 'hashtags', 'audio'] &&
+        data.status in ['draft', 'approved', 'published'] &&
+        data.platform in ['youtube', 'tiktok', 'instagram'];
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isAuthenticated() && isValidUser(request.resource.data) && (isOwner(userId) || isAdmin());
+      allow update: if isAuthenticated() && isValidUser(request.resource.data) && (isOwner(userId) || isAdmin()) && 
+                    (request.resource.data.role == resource.data.role || isAdmin());
+    }
+
+    match /content/{contentId} {
+      allow read: if isDocOwner() || isAdmin();
+      allow create: if isAuthenticated() && isValidContent(request.resource.data);
+      allow update: if isAuthenticated() && isValidContent(request.resource.data) && isDocOwner();
+      allow delete: if isAuthenticated() && (isDocOwner() || isAdmin());
+    }
+  }
+}

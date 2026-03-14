@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, Component, ErrorInfo, ReactNode } from "react";
 import { 
   LayoutDashboard, 
   PlusCircle, 
@@ -10,12 +10,16 @@ import {
   ShieldCheck,
   Menu,
   X,
-  Sparkles
+  Sparkles,
+  AlertTriangle
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { User, ContentItem, Role } from "./types";
 import { cn } from "./lib/utils";
 import { PayPalScriptProvider } from "@paypal/react-paypal-js";
+import { auth, db } from "./firebase";
+import { onAuthStateChanged, signOut } from "firebase/auth";
+import { doc, getDoc, setDoc, onSnapshot, collection, query, where, orderBy, getDocs, addDoc, serverTimestamp } from "firebase/firestore";
 import Auth from "./components/Auth";
 import Dashboard from "./components/Dashboard";
 import CreateContent from "./components/CreateContent";
@@ -24,76 +28,163 @@ import AdminPanel from "./components/AdminPanel";
 import Pricing from "./components/Pricing";
 import Analytics from "./components/Analytics";
 import Settings from "./components/Settings";
+import CreditsManager from "./components/CreditsManager";
 
-type View = 'dashboard' | 'create' | 'manage' | 'analytics' | 'admin' | 'settings' | 'pricing';
+// Error Boundary Component
+class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean, error: Error | null }> {
+  constructor(props: { children: ReactNode }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error("ErrorBoundary caught an error", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen bg-bg-dark flex flex-col items-center justify-center p-6 text-center">
+          <div className="w-20 h-20 rounded-3xl bg-red-500/10 flex items-center justify-center mb-6 border border-red-500/20">
+            <AlertTriangle className="w-10 h-10 text-red-500 neon-glow" />
+          </div>
+          <h1 className="text-2xl font-bold text-text-heading mb-4">Something went wrong</h1>
+          <div className="max-w-md bg-white/5 border border-white/10 p-4 rounded-2xl mb-6">
+            <p className="text-sm text-text-body/60 font-mono break-all">
+              {this.state.error?.message || "An unexpected error occurred"}
+            </p>
+          </div>
+          <button 
+            onClick={() => window.location.reload()}
+            className="px-8 py-3 bg-primary text-white rounded-xl font-bold neon-glow hover:bg-primary/90 transition-all"
+          >
+            Reload Application
+          </button>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
+type View = 'dashboard' | 'create' | 'manage' | 'analytics' | 'admin' | 'settings' | 'pricing' | 'credits';
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isAuthReady, setIsAuthReady] = useState(false);
   const [cookiesBlocked, setCookiesBlocked] = useState(false);
   const [currentView, setCurrentView] = useState<View>('dashboard');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [guestActionCount, setGuestActionCount] = useState(0);
-
-  useEffect(() => {
-    // Check if cookies are enabled
-    const areCookiesEnabled = () => {
-      try {
-        document.cookie = "testcookie=1; SameSite=None; Secure";
-        const cookieEnabled = document.cookie.indexOf("testcookie=") !== -1;
-        document.cookie = "testcookie=1; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=None; Secure";
-        return cookieEnabled;
-      } catch (e) {
-        return false;
-      }
-    };
-
-    if (!areCookiesEnabled()) {
-      setCookiesBlocked(true);
-    }
-
-    checkAuth();
-
-    const handleOpenAuth = () => setShowAuthModal(true);
-    window.addEventListener('open-auth', handleOpenAuth);
-    return () => window.removeEventListener('open-auth', handleOpenAuth);
-  }, []);
+  const [notification, setNotification] = useState<{ type: 'success' | 'error', message: string } | null>(null);
 
   const checkAuth = async () => {
-    try {
-      const res = await fetch("/api/auth/me", { credentials: "include" });
-      if (res.ok) {
-        const data = await res.json();
-        setUser(data.user);
+    const firebaseUser = auth.currentUser;
+    if (firebaseUser) {
+      const userDocRef = doc(db, "users", firebaseUser.uid);
+      const userDoc = await getDoc(userDocRef);
+      if (userDoc.exists()) {
+        setUser({ id: firebaseUser.uid as any, ...userDoc.data() } as User);
+      }
+    }
+  };
+
+  useEffect(() => {
+    const unsubscribeAuth = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (firebaseUser) {
+        // Fetch user profile from Firestore
+        const userDocRef = doc(db, "users", firebaseUser.uid);
+        const userDoc = await getDoc(userDocRef);
+        
+        if (userDoc.exists()) {
+          setUser({ id: firebaseUser.uid as any, ...userDoc.data() } as User);
+        } else {
+          // Create initial profile if it doesn't exist
+          const newUser: Partial<User> = {
+            email: firebaseUser.email || "",
+            name: firebaseUser.displayName || "New Creator",
+            role: "user",
+            credits: 10,
+            subscription_status: "free",
+            created_at: new Date().toISOString()
+          };
+          await setDoc(userDocRef, newUser);
+          setUser({ id: firebaseUser.uid as any, ...newUser } as User);
+        }
+
         setShowAuthModal(false);
       } else {
         setUser(null);
       }
-    } catch (error) {
-      console.error("Auth check failed", error);
-      setUser(null);
-    } finally {
       setLoading(false);
+      setIsAuthReady(true);
+    });
+
+    // Handle payment redirects
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('payment') === 'success') {
+      setNotification({ type: 'success', message: 'Payment successful! Your account has been updated.' });
+      window.history.replaceState({}, document.title, window.location.pathname);
+    } else if (urlParams.get('payment') === 'cancel') {
+      setNotification({ type: 'error', message: 'Payment cancelled.' });
+      window.history.replaceState({}, document.title, window.location.pathname);
     }
-  };
+    
+    const handleCreditsUpdate = (e: any) => {
+      setUser(prev => prev ? { ...prev, credits: e.detail } : null);
+    };
+    const handleNavigateToCredits = () => {
+      setCurrentView('credits');
+    };
+    const handleNavigateToCreate = (e: any) => {
+      setCurrentView('create');
+      if (e.detail?.tab) {
+        setTimeout(() => {
+          window.dispatchEvent(new CustomEvent('set-create-tab', { detail: e.detail.tab }));
+        }, 100);
+      }
+    };
+    window.addEventListener('credits-updated', handleCreditsUpdate);
+    window.addEventListener('navigate-to-credits', handleNavigateToCredits);
+    window.addEventListener('navigate-to-create', handleNavigateToCreate);
+    return () => {
+      unsubscribeAuth();
+      window.removeEventListener('credits-updated', handleCreditsUpdate);
+      window.removeEventListener('navigate-to-credits', handleNavigateToCredits);
+      window.removeEventListener('navigate-to-create', handleNavigateToCreate);
+    };
+  }, []);
+
+  // Real-time credits listener
+  useEffect(() => {
+    if (isAuthReady && user) {
+      const unsubscribe = onSnapshot(doc(db, "users", user.id.toString()), (doc) => {
+        if (doc.exists()) {
+          setUser(prev => prev ? { ...prev, ...doc.data() } : null);
+        }
+      });
+      return () => unsubscribe();
+    }
+  }, [isAuthReady, user?.id]);
 
   const handleAction = () => {
-    if (user) return true;
-    
-    if (guestActionCount >= 1) {
+    if (!user) {
       setShowAuthModal(true);
       return false;
     }
-    
-    setGuestActionCount(prev => prev + 1);
     return true;
   };
 
   const handleLogout = async () => {
-    await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
+    await signOut(auth);
     setUser(null);
-    setGuestActionCount(0);
     setCurrentView('dashboard');
   };
 
@@ -109,7 +200,8 @@ export default function App() {
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'create', label: 'Create Content', icon: PlusCircle },
     { id: 'manage', label: 'Manage Content', icon: FolderOpen },
-    { id: 'pricing', label: 'Pricing & Plans', icon: Sparkles },
+    { id: 'credits', label: 'Credits & Referrals', icon: Sparkles },
+    { id: 'pricing', label: 'Pricing & Plans', icon: ShieldCheck },
     { id: 'analytics', label: 'Analytics', icon: BarChart3 },
     { id: 'settings', label: 'Settings', icon: SettingsIcon },
   ];
@@ -119,13 +211,45 @@ export default function App() {
   }
 
   return (
-    <PayPalScriptProvider options={{ 
-      clientId: (import.meta as any).env.VITE_PAYPAL_CLIENT_ID || "test",
-      currency: "USD",
-      intent: "capture"
-    }}>
-      <div className="min-h-screen bg-bg-dark flex text-text-body relative overflow-hidden">
-        {/* Cookie Warning */}
+    <ErrorBoundary>
+      <PayPalScriptProvider options={{ 
+        clientId: (import.meta as any).env.VITE_PAYPAL_CLIENT_ID || "test",
+        currency: "USD",
+        intent: "capture"
+      }}>
+        <div className="min-h-screen bg-bg-dark flex text-text-body relative overflow-hidden">
+          {/* Auth Modal */}
+          <AnimatePresence>
+            {showAuthModal && (
+              <Auth onClose={() => setShowAuthModal(false)} />
+            )}
+          </AnimatePresence>
+
+          {/* Notifications */}
+      <AnimatePresence>
+        {notification && (
+          <motion.div
+            initial={{ opacity: 0, y: -50 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -50 }}
+            className={cn(
+              "fixed top-6 left-1/2 -translate-x-1/2 z-[300] px-6 py-3 rounded-2xl shadow-2xl flex items-center gap-3 border",
+              notification.type === 'success' ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400" : "bg-red-500/10 border-red-500/20 text-red-400"
+            )}
+          >
+            <div className={cn(
+              "w-2 h-2 rounded-full animate-pulse",
+              notification.type === 'success' ? "bg-emerald-500" : "bg-red-500"
+            )} />
+            <p className="text-sm font-bold">{notification.message}</p>
+            <button onClick={() => setNotification(null)} className="ml-2 hover:opacity-70">
+              <X className="w-4 h-4" />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Cookie Warning */}
         <AnimatePresence>
           {cookiesBlocked && (
             <motion.div
@@ -162,18 +286,23 @@ export default function App() {
         {/* Sidebar */}
       <aside 
         className={cn(
-          "bg-secondary border-r border-white/5 transition-all duration-300 flex flex-col z-50 fixed inset-y-0 left-0",
-          isSidebarOpen ? "w-64 translate-x-0" : "w-64 -translate-x-full"
+          "bg-secondary border-r border-white/5 transition-all duration-300 flex flex-col z-50 fixed lg:static inset-y-0 left-0",
+          isSidebarOpen ? "w-64 translate-x-0" : "w-64 -translate-x-full lg:w-20 lg:translate-x-0"
         )}
       >
-        <div className="p-6 flex items-center gap-3 border-b border-white/5">
-          <div className="bg-primary p-2 rounded-lg neon-glow">
+        <div className="p-6 flex items-center gap-3 border-b border-white/5 overflow-hidden">
+          <div className="bg-primary p-2 rounded-lg neon-glow shrink-0">
             <Sparkles className="w-6 h-6 text-white" />
           </div>
-          {isSidebarOpen && <span className="font-display font-bold text-xl tracking-tight text-text-heading">CreatorForge</span>}
+          <span className={cn(
+            "font-display font-bold text-xl tracking-tight text-text-heading transition-opacity duration-300",
+            !isSidebarOpen && "lg:opacity-0 lg:w-0"
+          )}>
+            CreatorForge
+          </span>
         </div>
 
-        <nav className="flex-1 py-6 px-3 space-y-2">
+        <nav className="flex-1 py-6 px-3 space-y-2 overflow-y-auto overflow-x-hidden">
           {navItems.map((item) => (
             <button
               key={item.id}
@@ -182,52 +311,72 @@ export default function App() {
                 if (window.innerWidth < 1024) setIsSidebarOpen(false);
               }}
               className={cn(
-                "w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200",
+                "w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 group",
                 currentView === item.id 
                   ? "bg-primary text-white neon-glow" 
                   : "text-text-body hover:bg-white/5 hover:text-text-heading"
               )}
+              title={!isSidebarOpen ? item.label : ""}
             >
               <item.icon className="w-5 h-5 shrink-0" />
-              <span className="font-medium">{item.label}</span>
+              <span className={cn(
+                "font-medium transition-opacity duration-300",
+                !isSidebarOpen && "lg:opacity-0 lg:w-0"
+              )}>
+                {item.label}
+              </span>
             </button>
           ))}
         </nav>
 
-        <div className="p-4 border-t border-white/5">
+        <div className="p-4 border-t border-white/5 overflow-hidden">
           {user ? (
-            <>
-              <div className="flex items-center gap-3 px-4 py-3 mb-2">
-                <div className="w-8 h-8 rounded-full bg-accent flex items-center justify-center text-white font-bold shadow-[0_0_10px_rgba(239,68,68,0.4)]">
-                  {user.name[0]}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <p className="text-sm font-medium truncate text-text-heading">{user.name}</p>
-                    {user.subscription_status && user.subscription_status !== 'free' && (
-                      <span className="px-1.5 py-0.5 rounded-md bg-primary/20 text-primary text-[8px] font-black uppercase tracking-widest border border-primary/30">
-                        {user.subscription_status}
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-xs text-text-body/60 truncate uppercase tracking-wider font-bold">{user.role}</p>
-                </div>
+            <div className="flex items-center gap-3 px-4 py-3 mb-2">
+              <div className="w-8 h-8 rounded-full bg-accent flex items-center justify-center text-white font-bold shadow-[0_0_10px_rgba(239,68,68,0.4)] shrink-0">
+                {user.name[0]}
               </div>
-              <button
-                onClick={handleLogout}
-                className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-text-body hover:bg-red-500/10 hover:text-red-400 transition-colors"
-              >
-                <LogOut className="w-5 h-5 shrink-0" />
-                <span className="font-medium">Logout</span>
-              </button>
-            </>
+              <div className={cn(
+                "flex-1 min-w-0 transition-opacity duration-300",
+                !isSidebarOpen && "lg:opacity-0 lg:w-0"
+              )}>
+                <div className="flex items-center gap-2">
+                  <p className="text-sm font-medium truncate text-text-heading">{user.name}</p>
+                  {user.subscription_status && user.subscription_status !== 'free' && (
+                    <span className="px-1.5 py-0.5 rounded-md bg-primary/20 text-primary text-[8px] font-black uppercase tracking-widest border border-primary/30">
+                      {user.subscription_status}
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-text-body/60 truncate uppercase tracking-wider font-bold">{user.role}</p>
+              </div>
+            </div>
           ) : (
-            <button
+            <button 
               onClick={() => setShowAuthModal(true)}
-              className="w-full flex items-center gap-3 px-4 py-3 rounded-xl bg-primary text-white neon-glow transition-all"
+              className="w-full flex items-center gap-3 px-4 py-3 rounded-xl bg-primary text-white neon-glow mb-2"
             >
               <UserIcon className="w-5 h-5 shrink-0" />
-              <span className="font-medium">Sign In</span>
+              <span className={cn(
+                "font-bold transition-opacity duration-300",
+                !isSidebarOpen && "lg:opacity-0 lg:w-0"
+              )}>
+                Login / Register
+              </span>
+            </button>
+          )}
+          
+          {user && (
+            <button 
+              onClick={handleLogout}
+              className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-text-body hover:bg-red-500/10 hover:text-red-400 transition-all"
+            >
+              <LogOut className="w-5 h-5 shrink-0" />
+              <span className={cn(
+                "font-medium transition-opacity duration-300",
+                !isSidebarOpen && "lg:opacity-0 lg:w-0"
+              )}>
+                Logout
+              </span>
             </button>
           )}
         </div>
@@ -235,7 +384,7 @@ export default function App() {
 
       {/* Main Content */}
       <main className="flex-1 flex flex-col min-w-0 h-screen overflow-hidden">
-        <header className="h-16 bg-secondary/50 backdrop-blur-md border-b border-white/5 flex items-center justify-between px-8 shrink-0">
+        <header className="h-16 bg-secondary/50 backdrop-blur-md border-b border-white/5 flex items-center justify-between px-4 sm:px-8 shrink-0">
           <button 
             onClick={() => setIsSidebarOpen(!isSidebarOpen)}
             className="p-2 hover:bg-white/5 rounded-lg transition-colors text-text-body"
@@ -243,27 +392,35 @@ export default function App() {
             {isSidebarOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
           </button>
           
-          <div className="flex items-center gap-4">
-            <div className="text-right hidden sm:block">
+          <div className="flex items-center gap-3 sm:gap-4">
+            {user ? (
+              <div 
+                onClick={() => setCurrentView('credits')}
+                className="flex items-center gap-2 bg-primary/10 border border-primary/20 px-2 sm:px-3 py-1.5 rounded-full cursor-pointer hover:bg-primary/20 transition-all"
+              >
+                <Sparkles className="w-4 h-4 text-primary" />
+                <span className="text-[10px] sm:text-xs font-black text-primary uppercase tracking-widest">{user.credits || 0} Credits</span>
+              </div>
+            ) : (
+              <button 
+                onClick={() => setShowAuthModal(true)}
+                className="px-4 py-1.5 bg-primary text-white rounded-full text-xs font-bold neon-glow"
+              >
+                Get Started
+              </button>
+            )}
+            <div className="text-right hidden md:block">
               <p className="text-sm font-medium text-text-heading">
                 {user ? `Welcome back, ${user.name}` : "Welcome, Guest"}
               </p>
               <p className="text-xs text-text-body/60">
-                {user ? "Ready to create something amazing?" : "Sign in to save your work!"}
+                {user ? "Ready to create something amazing?" : "Login to save your work"}
               </p>
             </div>
-            {!user && (
-              <button 
-                onClick={() => setShowAuthModal(true)}
-                className="px-4 py-2 bg-primary text-white rounded-xl text-xs font-bold neon-glow"
-              >
-                Sign In
-              </button>
-            )}
           </div>
         </header>
 
-        <div className="flex-1 overflow-y-auto p-8 bg-[radial-gradient(circle_at_top_right,_var(--tw-gradient-stops))] from-primary/5 via-transparent to-transparent">
+        <div className="flex-1 overflow-y-auto p-4 sm:p-8 bg-[radial-gradient(circle_at_top_right,_var(--tw-gradient-stops))] from-primary/5 via-transparent to-transparent">
           <AnimatePresence mode="wait">
             <motion.div
               key={currentView}
@@ -276,6 +433,7 @@ export default function App() {
               {currentView === 'dashboard' && <Dashboard user={user} onNavigate={setCurrentView} />}
               {currentView === 'create' && <CreateContent user={user} onAction={handleAction} />}
               {currentView === 'manage' && <ManageContent user={user} onNavigate={setCurrentView} />}
+              {currentView === 'credits' && <CreditsManager user={user} onCreditsUpdate={(credits) => setUser(prev => prev ? { ...prev, credits } : null)} />}
               {currentView === 'admin' && user?.role === 'admin' && <AdminPanel />}
               {currentView === 'pricing' && <Pricing user={user} onRefresh={checkAuth} />}
               {currentView === 'analytics' && <Analytics user={user} />}
@@ -283,30 +441,9 @@ export default function App() {
             </motion.div>
           </AnimatePresence>
         </div>
-
-        {/* Auth Modal */}
-        <AnimatePresence>
-          {showAuthModal && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
-            >
-              <div className="relative w-full max-w-md">
-                <button 
-                  onClick={() => setShowAuthModal(false)}
-                  className="absolute top-4 right-4 p-2 text-text-body/60 hover:text-text-heading z-[110]"
-                >
-                  <X className="w-6 h-6" />
-                </button>
-                <Auth onLogin={checkAuth} isModal />
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
       </main>
     </div>
     </PayPalScriptProvider>
+    </ErrorBoundary>
   );
 }

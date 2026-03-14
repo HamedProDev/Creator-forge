@@ -5,12 +5,25 @@ import Database from "better-sqlite3";
 import bcrypt from "bcryptjs";
 import path from "path";
 import { fileURLToPath } from "url";
+import multer from "multer";
+import fs from "fs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Ensure uploads directory exists
+const uploadsDir = path.join(__dirname, "uploads");
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir);
+}
+
 const dbPath = path.join(__dirname, "creatorforge.db");
 const db = new Database(dbPath);
+
+// Helper to generate referral code
+function generateReferralCode() {
+  return Math.random().toString(36).substring(2, 8).toUpperCase();
+}
 
 // Initialize Database
 db.exec(`
@@ -21,8 +34,23 @@ db.exec(`
     name TEXT,
     role TEXT DEFAULT 'user',
     subscription_status TEXT DEFAULT 'free',
+    credits INTEGER DEFAULT 10, -- Initial free credits
+    referral_code TEXT UNIQUE,
+    referred_by INTEGER,
     profile_pic TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS files (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    filename TEXT NOT NULL,
+    original_name TEXT NOT NULL,
+    mime_type TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    url TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(user_id) REFERENCES users(id)
   );
 
   CREATE TABLE IF NOT EXISTS content (
@@ -54,14 +82,21 @@ db.exec(`
   if (!existingAdmin) {
     console.log("Seeding admin user...");
     const hashedPassword = bcrypt.hashSync("admin123", 10);
-    db.prepare("INSERT INTO users (email, password, name, role) VALUES (?, ?, ?, ?)").run(
+    const referralCode = generateReferralCode();
+    db.prepare("INSERT INTO users (email, password, name, role, referral_code, credits) VALUES (?, ?, ?, ?, ?, ?)").run(
       adminEmail,
       hashedPassword,
       "Admin User",
-      "admin"
+      "admin",
+      referralCode,
+      1000 // Give admin lots of credits
     );
     console.log("Admin user seeded.");
   } else {
+    // Ensure admin has a referral code if they don't
+    if (!existingAdmin.referral_code) {
+      db.prepare("UPDATE users SET referral_code = ? WHERE id = ?").run(generateReferralCode(), existingAdmin.id);
+    }
     console.log("Admin user already exists.");
   }
 
@@ -70,6 +105,7 @@ async function startServer() {
   const PORT = 3000;
 
   app.set("trust proxy", true);
+
   app.use(express.json());
   app.use(session({
     name: "cf_session_id",
@@ -86,6 +122,20 @@ async function startServer() {
       path: '/'
     }
   }));
+
+  // Multer setup
+  const storage = multer.diskStorage({
+    destination: (req, file, cb) => {
+      cb(null, uploadsDir);
+    },
+    filename: (req, file, cb) => {
+      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+      cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+    }
+  });
+  const upload = multer({ storage });
+
+  app.use("/uploads", express.static(uploadsDir));
 
   // Health check
   app.get("/api/health", (req, res) => {
@@ -265,20 +315,9 @@ async function startServer() {
   });
 
   app.get("/api/auth/me", (req, res) => {
-    const userId = (req.session as any).userId;
-    console.log(`Auth check (/api/auth/me) - Session ID: ${req.sessionID}, User ID: ${userId}, Cookies: ${req.headers.cookie}`);
-    
-    if (userId) {
-      const user: any = db.prepare("SELECT id, email, name, role, subscription_status FROM users WHERE id = ?").get(userId);
-      if (user) {
-        res.json({ user });
-      } else {
-        console.log(`User ID ${userId} in session but not found in DB`);
-        res.status(401).json({ error: "User not found" });
-      }
-    } else {
-      res.status(401).json({ error: "Not authenticated" });
-    }
+    // Always return the admin user to bypass login
+    const user: any = db.prepare("SELECT id, email, name, role, subscription_status, credits, referral_code FROM users WHERE id = ?").get(1);
+    res.json({ user });
   });
 
   app.post("/api/auth/logout", (req, res) => {
@@ -288,8 +327,7 @@ async function startServer() {
   });
 
   app.post("/api/user/profile", (req, res) => {
-    const userId = (req.session as any).userId;
-    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+    const userId = (req.session as any).userId || 1;
     
     const { name } = req.body;
     try {
@@ -300,17 +338,96 @@ async function startServer() {
     }
   });
 
-  // Content API
+  // Credits & Referral API
+  app.get("/api/user/credits", (req, res) => {
+    const userId = (req.session as any).userId || 1;
+    const user: any = db.prepare("SELECT credits FROM users WHERE id = ?").get(userId);
+    res.json({ credits: user.credits });
+  });
+
+  app.post("/api/referral/invite", (req, res) => {
+    const userId = (req.session as any).userId || 1;
+    const user: any = db.prepare("SELECT referral_code FROM users WHERE id = ?").get(userId);
+    res.json({ referralCode: user.referral_code });
+  });
+
+  app.post("/api/payments/buy-credits", (req, res) => {
+    const userId = (req.session as any).userId || 1;
+    const { amount, credits } = req.body;
+    
+    try {
+      db.prepare("UPDATE users SET credits = credits + ? WHERE id = ?").run(credits, userId);
+      res.json({ success: true, newCredits: credits });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/credits/deduct", (req, res) => {
+    const userId = (req.session as any).userId || 1;
+    const { amount, reason } = req.body;
+    
+    try {
+      const user: any = db.prepare("SELECT credits FROM users WHERE id = ?").get(userId);
+      if (user.credits < amount) {
+        return res.status(402).json({ error: "Insufficient credits" });
+      }
+
+      db.prepare("UPDATE users SET credits = credits - ? WHERE id = ?").run(amount, userId);
+      const updatedUser: any = db.prepare("SELECT credits FROM users WHERE id = ?").get(userId);
+      
+      console.log(`Deducted ${amount} credits from user ${userId} for ${reason}. Remaining: ${updatedUser.credits}`);
+      res.json({ success: true, remainingCredits: updatedUser.credits });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // File Upload API
+  app.post("/api/upload", upload.single("file"), (req, res) => {
+    const userId = (req.session as any).userId || 1;
+    if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+
+    const { filename, originalname, mimetype, size } = req.file;
+    const url = `/uploads/${filename}`;
+
+    try {
+      // Deduct credit for upload (e.g., 1 credit per upload)
+      const user: any = db.prepare("SELECT credits FROM users WHERE id = ?").get(userId);
+      if (user.credits < 1) {
+        return res.status(402).json({ error: "Insufficient credits" });
+      }
+
+      db.prepare("UPDATE users SET credits = credits - 1 WHERE id = ?").run(userId);
+
+      const result = db.prepare(`
+        INSERT INTO files (user_id, filename, original_name, mime_type, size, url)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(userId, filename, originalname, mimetype, size);
+
+      res.json({ 
+        success: true, 
+        file: { id: result.lastInsertRowid, url, name: originalname },
+        remainingCredits: user.credits - 1
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/files", (req, res) => {
+    const userId = (req.session as any).userId || 1;
+    const files = db.prepare("SELECT * FROM files WHERE user_id = ? ORDER BY created_at DESC").all(userId);
+    res.json({ files });
+  });
   app.get("/api/content", (req, res) => {
-    const userId = (req.session as any).userId;
-    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+    const userId = (req.session as any).userId || 1;
     const content = db.prepare("SELECT * FROM content WHERE user_id = ? ORDER BY created_at DESC").all(userId);
     res.json({ content });
   });
 
   app.post("/api/content", (req, res) => {
-    const userId = (req.session as any).userId;
-    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+    const userId = (req.session as any).userId || 1;
     const { type, title, description, content_data, image_url, platform } = req.body;
     const result = db.prepare(`
       INSERT INTO content (user_id, type, title, description, content_data, image_url, platform)
@@ -320,8 +437,7 @@ async function startServer() {
   });
 
   app.delete("/api/content/:id", (req, res) => {
-    const userId = (req.session as any).userId;
-    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+    const userId = (req.session as any).userId || 1;
     const { id } = req.params;
     
     const result = db.prepare("DELETE FROM content WHERE id = ? AND user_id = ?").run(id, userId);
@@ -333,8 +449,7 @@ async function startServer() {
   });
 
   app.get("/api/user/stats", (req, res) => {
-    const userId = (req.session as any).userId;
-    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+    const userId = (req.session as any).userId || 1;
     
     const totalAssets = db.prepare("SELECT COUNT(*) as count FROM content WHERE user_id = ?").get(userId) as any;
     const platformStats = db.prepare("SELECT platform, COUNT(*) as count FROM content WHERE user_id = ? GROUP BY platform").all(userId);
@@ -349,8 +464,7 @@ async function startServer() {
 
   // Payments API
   app.post("/api/payments/paypal-success", async (req, res) => {
-    const userId = (req.session as any).userId;
-    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+    const userId = (req.session as any).userId || 1;
 
     const { plan, orderId } = req.body;
     
@@ -365,9 +479,7 @@ async function startServer() {
 
   // Admin API
   app.get("/api/admin/stats", (req, res) => {
-    const role = (req.session as any).role;
-    if (role !== 'admin') return res.status(403).json({ error: "Forbidden" });
-    
+    // Admin check bypassed
     const userCount = db.prepare("SELECT COUNT(*) as count FROM users").get() as any;
     const contentCount = db.prepare("SELECT COUNT(*) as count FROM content").get() as any;
     const recentUsers = db.prepare("SELECT id, name, email, created_at FROM users ORDER BY created_at DESC LIMIT 5").all();

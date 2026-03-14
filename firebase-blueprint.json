@@ -1,0 +1,47 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile and account information",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "format": "email" },
+        "name": { "type": "string" },
+        "role": { "type": "string", "enum": ["user", "admin"] },
+        "credits": { "type": "integer" },
+        "subscription_status": { "type": "string", "enum": ["free", "pro", "enterprise"] },
+        "referral_code": { "type": "string" },
+        "profile_pic": { "type": "string", "format": "uri" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["email", "name", "role", "credits"]
+    },
+    "Content": {
+      "title": "Content",
+      "description": "Generated AI content assets",
+      "type": "object",
+      "properties": {
+        "user_id": { "type": "string" },
+        "type": { "type": "string", "enum": ["thumbnail", "image", "title", "script", "hashtags", "audio"] },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "content_data": { "type": "string" },
+        "image_url": { "type": "string", "format": "uri" },
+        "status": { "type": "string", "enum": ["draft", "approved", "published"] },
+        "platform": { "type": "string", "enum": ["youtube", "tiktok", "instagram"] },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["user_id", "type", "status", "platform", "created_at"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles"
+    },
+    "/content/{contentId}": {
+      "schema": "Content",
+      "description": "Generated content items"
+    }
+  }
+}
